@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create multiple EC2 instances running Ubuntu, install Docker, authenticate to Docker Hub, and distribute them across multiple subnets with an IAM role attached.
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.xlarge
+    Description: The EC2 instance type.
+    AllowedValues:
+      - t3.xlarge
+      - t3.large
+      - t3.medium
+    ConstraintDescription: Must be a valid EC2 instance type.
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance.
+
+  VPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: The ID of the VPC where the instance will be launched.
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of Subnet IDs where EC2 instances should be distributed.
+    Default: ""
+    ConstraintDescription: Must be a list of valid subnet IDs within the VPC.
+
+  DockerHubUsername:
+    Type: String
+    Description: Docker Hub Username to authenticate.
+
+  DockerHubPassword:
+    Type: String
+    Description: Docker Hub Password or token to authenticate.
+    NoEcho: true  # Hide sensitive information in CloudFormation outputs.
+
+  InstanceCount:
+    Type: Number
+    Default: 1
+    Description: Number of EC2 instances to create. Minimum of 1.
+    MinValue: 1
+    MaxValue: 25  # You can adjust this limit based on your scaling needs.
+
+  AMI:
+    Type: AWS::EC2::Image::Id
+    Description: The ID of the AMI to use for the EC2 instances.
+    Default: ami-04dd23e62ed049936 # Example for Ubuntu 20.04 in us-east-1, can be overridden.
+
+Resources:
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        ImageId: !Ref AMI  # Parameterized AMI
+        IamInstanceProfile:
+          Arn: arn:aws:iam::122241224626:instance-profile/ec2s3Access  # Instance profile to attach
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true # Ensure public IP is assigned
+            Groups:
+              - !Ref InstanceSecurityGroup
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub 'webscraper-server' #
+              - Key: Environment
+                Value: Production
+              - Key: Project
+                Value: WebScraping
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            # Update the package index
+            sudo apt-get update -y
+
+            # Install packages to allow apt to use a repository over HTTPS
+            sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common
+
+            # Add Docker’s official GPG key
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+            # Set up the stable repository
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+            # Update the package index again with Docker packages
+            sudo apt-get update -y
+
+            # Install Docker
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+
+            # Start and enable Docker service
+            sudo systemctl start docker
+            sudo systemctl enable docker
+
+            # Create the docker group if it doesn't already exist
+            sudo groupadd docker
+
+            # Add ubuntu user to the docker group
+            sudo usermod -aG docker ubuntu
+
+            # Refresh group membership
+            newgrp docker
+
+            # Log in to Docker Hub
+            echo "${DockerHubPassword}" | docker login -u "${DockerHubUsername}" --password-stdin
+
+            # Docker verification
+            docker --version
+            
+            # Install the SSM agent
+            sudo snap install amazon-ssm-agent --classic
+            sudo systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
+            sudo systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service
+            sudo systemctl status snap.amazon-ssm-agent.amazon-ssm-agent.service
+
+            # Stop all running Docker containers
+            docker stop $(docker ps -q)
+
+            # Remove all Docker containers forcibly
+            docker rm -f $(docker ps -a -q)
+
+            # Remove all Docker images forcibly
+            docker rmi -f $(docker images -q)
+
+            # Pull the webscraper Docker image
+            docker pull outreachgenius/webscraper-prod
+
+            # Run the webscraper Docker image
+            docker run outreachgenius/webscraper-prod
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Ref SubnetIds  # Use multiple subnet IDs for EC2 distribution
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: !Ref InstanceCount
+      MaxSize: !Ref InstanceCount
+      DesiredCapacity: !Ref InstanceCount
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: Enable SSH and HTTP access
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0 # Consider limiting this to your IP address for security
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+Outputs:
+  AutoScalingGroupName:
+    Description: Name of the Auto Scaling Group
+    Value: !Ref AutoScalingGroup
