@@ -14,7 +14,7 @@ Parameters:
 
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
-    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance.
+    Description: Name of an EC2 KeyPair to enable SSH access to the instance.
 
   VPCId:
     Type: AWS::EC2::VPC::Id
@@ -33,7 +33,7 @@ Parameters:
   DockerHubPassword:
     Type: String
     Description: Docker Hub Password or token to authenticate.
-    NoEcho: true  # Hide sensitive information in CloudFormation outputs.
+    NoEcho: true  # To Hide sensitive information in CloudFormation outputs.
 
   InstanceCount:
     Type: Number
@@ -45,7 +45,7 @@ Parameters:
   AMI:
     Type: AWS::EC2::Image::Id
     Description: The ID of the AMI to use for the EC2 instances.
-    Default: ami-04dd23e62ed049936 # Example for Ubuntu 20.04 in us-east-1, can be overridden.
+    Default: ami-xxxxxxxx # Example for Ubuntu 20.04 in us-east-1, can be overridden.
 
 Resources:
   LaunchTemplate:
@@ -56,7 +56,7 @@ Resources:
         KeyName: !Ref KeyName
         ImageId: !Ref AMI  # Parameterized AMI
         IamInstanceProfile:
-          Arn: arn:aws:iam::122241224626:instance-profile/ec2s3Access  # Instance profile to attach
+          Arn: <your-iam-role-profile>  # Instance profile to attach
         NetworkInterfaces:
           - DeviceIndex: 0
             AssociatePublicIpAddress: true # Ensure public IP is assigned
@@ -127,10 +127,10 @@ Resources:
             docker rmi -f $(docker images -q)
 
             # Pull the webscraper Docker image
-            docker pull outreachgenius/webscraper-prod
+            docker pull <your-docker-image>
 
             # Run the webscraper Docker image
-            docker run outreachgenius/webscraper-prod
+            docker run <your-docker-image>
 
   AutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
